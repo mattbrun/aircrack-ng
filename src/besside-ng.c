@@ -706,7 +706,7 @@ static void wifi_send(void *p, int len)
 
 	rc = wi_write(_state.s_wi, p, len, &tx);
 	if (rc == -1)
-		err(1, "wi_wirte()");
+		err(1, "wi_write()");
 }
 
 static void deauth_send(struct network *n, unsigned char *mac)
@@ -2002,6 +2002,7 @@ static void wifi_mgt(struct network *n, struct ieee80211_frame *wh, int len)
 	switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
 	case IEEE80211_FC0_SUBTYPE_BEACON:
 		wifi_beacon(n, wh, len);
+		break;
 
 	case IEEE80211_FC0_SUBTYPE_AUTH:
 		wifi_auth(n, wh, len);

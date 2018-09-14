@@ -66,6 +66,7 @@
 #include "crctable_osdep.h"
 #include "common.h"
 #include "byteorder.h"
+#include "channel.h"
 
 #ifdef CONFIG_LIBNL
 struct nl80211_state state;
@@ -943,7 +944,7 @@ static int ieee80211_channel_to_frequency(int chan)
     return (chan + 1000) * 5;
 }
 
-static int linux_set_channel_nl80211(struct wif *wi, int channel)
+static int linux_set_ht_channel_nl80211(struct wif *wi, int channel, unsigned int htval)
 {
     struct priv_linux *dev = wi_priv(wi);
     char s[32];
@@ -952,7 +953,6 @@ static int linux_set_channel_nl80211(struct wif *wi, int channel)
     unsigned int devid;
     struct nl_msg *msg;
     unsigned int freq;
-    unsigned int htval = NL80211_CHAN_NO_HT;
 
     memset( s, 0, sizeof( s ) );
 
@@ -1032,7 +1032,20 @@ static int linux_set_channel_nl80211(struct wif *wi, int channel)
 
     NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devid);
     NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_FREQ, freq);
-    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, htval);
+
+    unsigned ht = NL80211_CHAN_NO_HT;
+    switch (htval) {
+        case CHANNEL_HT20:
+            ht = NL80211_CHAN_HT20;
+            break;
+        case CHANNEL_HT40_PLUS:
+            ht = NL80211_CHAN_HT40PLUS;
+            break;
+        case CHANNEL_HT40_MINUS:
+            ht = NL80211_CHAN_HT40MINUS;
+            break;
+    }
+    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, ht);
 
     nl_send_auto_complete(state.nl_sock,msg);
     nlmsg_free(msg);
@@ -1042,6 +1055,11 @@ static int linux_set_channel_nl80211(struct wif *wi, int channel)
     return( 0 );
  nla_put_failure:
     return -ENOBUFS;
+}
+
+static int linux_set_channel_nl80211(struct wif *wi, int channel)
+{
+    return linux_set_ht_channel_nl80211(wi, channel, CHANNEL_NO_HT);
 }
 #else //CONFIG_LIBNL
 
@@ -1616,7 +1634,8 @@ static int do_linux_open(struct wif *wi, char *iface)
     DIR *net_ifaces;
     struct dirent *this_iface;
     FILE *acpi;
-    char r_file[128], buf[128];
+	char buf[128];
+    char * r_file = NULL;
     struct ifreq ifr;
     char * unused_str;
     int iface_malloced = 0;
@@ -1878,8 +1897,13 @@ static int do_linux_open(struct wif *wi, char *iface)
 
     if( dev->drivertype == DT_IPW2200 )
     {
-        snprintf(r_file, sizeof(r_file),
+        r_file = (char *)calloc(33 + strlen(iface) + 1, sizeof(char));
+        if (!r_file) {
+            goto close_out;
+        }
+        snprintf(r_file, 33 + strlen(iface) + 1,
             "/sys/class/net/%s/device/rtap_iface", iface);
+
         if ((acpi = fopen(r_file, "r")) == NULL)
             goto close_out;
         memset(buf, 0, 128);
@@ -1934,8 +1958,14 @@ static int do_linux_open(struct wif *wi, char *iface)
                 if (this_iface->d_name[0] == '.')
                     continue;
 
-                snprintf(r_file, sizeof(r_file),
+                char * new_r_file = (char *)realloc(r_file, (33 + strlen(this_iface->d_name) + 1) * sizeof(char));
+                if (!r_file) {
+                    continue;
+                }
+                r_file = new_r_file;
+                snprintf(r_file, 33 + strlen(this_iface->d_name) + 1,
                     "/sys/class/net/%s/device/rtap_iface", this_iface->d_name);
+
                 if ((acpi = fopen(r_file, "r")) == NULL)
                     continue;
                 if (acpi != NULL)
@@ -1995,10 +2025,6 @@ static int do_linux_open(struct wif *wi, char *iface)
         }
     }
 
-    if(0)
-    fprintf(stderr, "Interface %s -> driver: %s\n", iface,
-        szaDriverTypes[dev->drivertype]);
-
     if (openraw(dev, iface, dev->fd_out, &dev->arptype_out, dev->pl_mac) != 0) {
         goto close_out;
     }
@@ -2006,10 +2032,10 @@ static int do_linux_open(struct wif *wi, char *iface)
     /* don't use the same file descriptor for in and out on bcm43xx,
        as you read from the interface, but write into a file in /sys/...
      */
-    if(!(dev->drivertype == DT_BCM43XX) && !(dev->drivertype == DT_IPW2200))
+    if(!(dev->drivertype == DT_BCM43XX) && !(dev->drivertype == DT_IPW2200)) {
+		close(dev->fd_in);
         dev->fd_in = dev->fd_out;
-    else
-    {
+    } else {
         /* if bcm43xx or ipw2200, swap both fds */
         n=dev->fd_out;
         dev->fd_out=dev->fd_in;
@@ -2022,6 +2048,9 @@ static int do_linux_open(struct wif *wi, char *iface)
     return 0;
 close_out:
     close(dev->fd_out);
+	if (r_file) {
+		free(r_file);
+	}
 close_in:
     close(dev->fd_in);
     if(iface_malloced) free(iface);
@@ -2060,10 +2089,15 @@ static void linux_close(struct wif *wi)
 {
 	struct priv_linux *pl = wi_priv(wi);
 
-	if (pl->fd_in)
+	if (pl->fd_in && pl->fd_out && pl->fd_in == pl->fd_out) {
+		// Only close one if both are the same
 		close(pl->fd_in);
-	if (pl->fd_out)
-		close(pl->fd_out);
+	} else {
+		if (pl->fd_in)
+			close(pl->fd_in);
+		if (pl->fd_out)
+			close(pl->fd_out);
+	}
 	if (pl->fd_main)
 		close(pl->fd_main);
 
@@ -2192,10 +2226,11 @@ static struct wif *linux_open(char *iface)
         wi->wi_write            = linux_write;
 #ifdef CONFIG_LIBNL
         linux_nl80211_init(&state);
+        wi->wi_set_ht_channel   = linux_set_ht_channel_nl80211;
         wi->wi_set_channel      = linux_set_channel_nl80211;
 #else
         wi->wi_set_channel      = linux_set_channel;
-#endif
+#endif //CONFIG_LIBNL
         wi->wi_get_channel      = linux_get_channel;
         wi->wi_set_freq		= linux_set_freq;
         wi->wi_get_freq		= linux_get_freq;
@@ -2271,8 +2306,8 @@ int get_battery_state(void)
         DIR *batteries, *ac_adapters;
         struct dirent *this_battery, *this_adapter;
         FILE *acpi, *info;
-        char battery_state[128];
-        char battery_info[128];
+        char battery_state[28 + sizeof (this_adapter->d_name) + 1];
+        char battery_info[24 + sizeof (this_battery->d_name) + 1];
         int rate = 1, remain = 0, current = 0;
         static int total_remain = 0, total_cap = 0;
         int batno = 0;

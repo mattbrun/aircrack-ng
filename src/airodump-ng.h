@@ -143,6 +143,7 @@ static unsigned char ZERO[32] =
 "\x00\x00\x00\x00\x00\x00\x00\x00";
 
 const char *OUI_PATHS[] = {
+    "./airodump-ng-oui.txt",
     "/etc/aircrack-ng/airodump-ng-oui.txt",
     "/usr/local/etc/aircrack-ng/airodump-ng-oui.txt",
     "/usr/share/aircrack-ng/airodump-ng-oui.txt",
@@ -210,6 +211,48 @@ struct WPS_info {
     unsigned int meth;        /* WPS Config Methods */
 };
 
+#define MAX_AC_MCS_INDEX 8
+
+/* 802.11n channel information */
+struct n_channel_info {
+	char mcs_index;     /* Maximum MCS TX index     */
+    char sec_channel;            /* 802.11n secondary channel*/
+    unsigned char short_gi_20;   /* Short GI for 20MHz       */
+    unsigned char short_gi_40;   /* Short GI for 40MHz       */
+    unsigned char any_chan_width;/* Support for 20 or 40MHz  
+                                    as opposed to only 20 or 
+                                    only 40MHz               */
+};
+
+/* 802.11ac channel information */
+struct ac_channel_info {
+    unsigned char center_sgmt[2];
+                                 /* 802.11ac Center segment 0*/
+    unsigned char mu_mimo;       /* MU-MIMO support          */
+    unsigned char short_gi_80;   /* Short GI for 80MHz       */
+	unsigned char short_gi_160;  /* Short GI for 160MHz      */
+	unsigned char split_chan;    /* 80+80MHz Channel support */
+	unsigned char mhz_160_chan;  /* 160 MHz channel support  */
+    unsigned char wave_2;        /* Wave 2                   */
+	unsigned char mcs_index[MAX_AC_MCS_INDEX];
+	                             /* Maximum TX rate          */
+};
+
+enum channel_width_enum {
+	CHANNEL_UNKNOWN_WIDTH,
+	CHANNEL_3MHZ,
+	CHANNEL_5MHZ,
+	CHANNEL_10MHZ,
+	CHANNEL_20MHZ,
+	CHANNEL_22MHZ,
+	CHANNEL_30MHZ,
+	CHANNEL_20_OR_40MHZ,
+	CHANNEL_40MHZ,
+	CHANNEL_80MHZ,
+	CHANNEL_80_80MHZ,
+	CHANNEL_160MHZ
+};
+
 /* linked list of detected access points */
 struct AP_info
 {
@@ -219,6 +262,13 @@ struct AP_info
     time_t tinit, tlast;      /* first and last time seen */
 
     int channel;              /* AP radio channel         */
+    enum channel_width_enum
+		channel_width;        /* Channel width            */
+    char standard[3];         /* 802.11 standard: n or ac */
+	struct n_channel_info
+		n_channel;            /* 802.11n channel info     */
+	struct ac_channel_info
+		ac_channel;           /* 802.11ac channel info    */
     int max_speed;            /* AP maximum speed in Mb/s */
     int avg_power;            /* averaged signal power    */
     int best_power;           /* best signal power    */
@@ -478,6 +528,9 @@ struct globals
     int file_write_interval;
     u_int maxsize_wps_seen;
     int show_wps;
+#ifdef CONFIG_LIBNL
+    int htval;
+#endif
 }
 G;
 
